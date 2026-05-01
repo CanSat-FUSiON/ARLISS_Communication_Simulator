@@ -203,18 +203,61 @@ function clearAllRelays() {
   recompute();
 }
 
-// Order relays along the CanSat→Base axis by projection distance
+// Order relays using Held-Karp DP for minimum total path length (CanSat→relays→Base).
+// O(N² × 2^N), negligible for N ≤ 10.
 function orderedRelays() {
-  if (state.relays.length === 0) return [];
-  const dxTotal = state.base.lon - state.cansat.lon;
-  const dyTotal = state.base.lat - state.cansat.lat;
-  const len2 = dxTotal*dxTotal + dyTotal*dyTotal;
-  if (len2 < 1e-12) return [...state.relays];
-  return [...state.relays].sort((a, b) => {
-    const ta = ((a.lon - state.cansat.lon) * dxTotal + (a.lat - state.cansat.lat) * dyTotal) / len2;
-    const tb = ((b.lon - state.cansat.lon) * dxTotal + (b.lat - state.cansat.lat) * dyTotal) / len2;
-    return ta - tb;
-  });
+  const relays = state.relays;
+  if (relays.length === 0) return [];
+  if (relays.length === 1) return [relays[0]];
+
+  const N = relays.length;
+  // nodes: [0]=cansat, [1..N]=relays, [N+1]=base
+  const nodes = [state.cansat, ...relays, state.base];
+  const dist = Array.from({length: N + 2}, (_, i) =>
+    nodes.map((_, j) => j <= i ? 0 : haversine(nodes[i].lat, nodes[i].lon, nodes[j].lat, nodes[j].lon))
+  );
+  // Fill symmetric
+  for (let i = 0; i < N + 2; i++) {
+    for (let j = 0; j < i; j++) dist[i][j] = dist[j][i];
+  }
+
+  const INF = 1e18;
+  const full = (1 << N) - 1;
+  // dp[i][mask] = min cost from cansat to relay[i] (0-indexed) visiting exactly {mask}
+  const dp = Array.from({length: N}, () => new Float64Array(full + 1).fill(INF));
+  const par = Array.from({length: N}, () => new Int8Array(full + 1).fill(-1));
+
+  for (let i = 0; i < N; i++) dp[i][1 << i] = dist[0][i + 1];
+
+  for (let mask = 1; mask <= full; mask++) {
+    for (let i = 0; i < N; i++) {
+      if (!(mask & (1 << i)) || dp[i][mask] === INF) continue;
+      for (let j = 0; j < N; j++) {
+        if (mask & (1 << j)) continue;
+        const nm = mask | (1 << j);
+        const nc = dp[i][mask] + dist[i + 1][j + 1];
+        if (nc < dp[j][nm]) { dp[j][nm] = nc; par[j][nm] = i; }
+      }
+    }
+  }
+
+  // Best last relay before base
+  let best = INF, last = 0;
+  for (let i = 0; i < N; i++) {
+    const c = dp[i][full] + dist[i + 1][N + 1];
+    if (c < best) { best = c; last = i; }
+  }
+
+  // Reconstruct
+  const path = [];
+  let cur = last, mask = full;
+  while (cur !== -1) {
+    path.push(relays[cur]);
+    const prev = par[cur][mask];
+    mask ^= (1 << cur);
+    cur = prev;
+  }
+  return path.reverse();
 }
 
 function updatePathLine() {
