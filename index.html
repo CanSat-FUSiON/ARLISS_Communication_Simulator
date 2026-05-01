@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CanSat 砂漠通信設計シミュレータ</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-tag">▎LINK BUDGET TERMINAL · v0.2</div>
+    <h1>CanSat 砂漠通信設計シミュレータ</h1>
+    <div class="sub">BLACK ROCK DESERT · NV · ARLISS</div>
+  </div>
+  <div class="topbar-actions">
+    <button id="btn-save" class="ghost">⬇ JSON保存</button>
+    <label for="file-load" class="ghost">⬆ JSON読込</label>
+    <input type="file" id="file-load" accept=".json" style="display:none;">
+    <button id="btn-reset" class="ghost">↺ リセット</button>
+  </div>
+</header>
+
+<!-- Top stat row -->
+<section class="stat-row">
+  <div class="stat" id="stat-margin">
+    <div class="stat-label">最弱区間マージン</div>
+    <div class="stat-value"><span id="v-margin">--</span> <span class="unit">dB</span></div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">LoRa ビットレート</div>
+    <div class="stat-value"><span id="v-bitrate">--</span> <span class="unit">bps</span></div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">最長区間距離</div>
+    <div class="stat-value"><span id="v-hopd">--</span> <span class="unit">km</span></div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Time on Air</div>
+    <div class="stat-value"><span id="v-toa">--</span> <span class="unit">ms</span></div>
+  </div>
+  <div class="stat" id="stat-arliss">
+    <div class="stat-label">ARLISS規定 (≤100mW)</div>
+    <div class="stat-value"><span id="v-arliss">--</span></div>
+  </div>
+</section>
+
+<main class="main-grid">
+
+  <!-- LEFT: settings -->
+  <aside class="left-panel">
+
+    <details class="panel" open>
+      <summary>01 · シナリオ</summary>
+      <div class="panel-body">
+        <div class="field">
+          <label>周波数帯</label>
+          <select id="band">
+            <option value="433">433 MHz — 米Part15・日アマ無線</option>
+            <option value="915">915 MHz — 米Part15</option>
+            <option value="920" selected>920 MHz — 日米共通(ARIB+FCC ISM)</option>
+            <option value="2400">2.4 GHz — 日米共通ISM</option>
+          </select>
+          <div class="hint" id="band-note"></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="panel" open>
+      <summary>02 · CanSat 送信側</summary>
+      <div class="panel-body">
+        <div class="slider-field">
+          <div class="slider-row">
+            <label>送信電力 Pt</label>
+            <span class="slider-val"><span id="v-tx-pwr">13</span> dBm</span>
+          </div>
+          <div class="slider-bar-wrap">
+            <input type="range" id="tx-pwr" min="0" max="30" step="1" value="13">
+            <div id="arliss-bar" class="arliss-marker" title="ARLISS上限 (100mW = 20dBm)"></div>
+          </div>
+          <div class="hint"><span id="v-tx-mw">20</span> mW · EIRP <span id="v-eirp">--</span> dBm</div>
+        </div>
+
+        <div class="field">
+          <label>CanSatアンテナ</label>
+          <select id="cansat-ant"></select>
+          <div class="hint" id="cansat-ant-note"></div>
+        </div>
+
+        <div class="slider-field">
+          <div class="slider-row">
+            <label>アンテナ高 (CanSat)</label>
+            <span class="slider-val"><span id="v-h-cansat">0.30</span> m</span>
+          </div>
+          <input type="range" id="h-cansat" min="0.05" max="3" step="0.05" value="0.3">
+          <div class="hint">地表転倒=0.1m / 機構展開=0.5m</div>
+        </div>
+      </div>
+    </details>
+
+    <details class="panel" open>
+      <summary>03 · 地上局 受信側</summary>
+      <div class="panel-body">
+        <div class="field">
+          <label>地上局アンテナ</label>
+          <select id="base-ant"></select>
+          <div class="hint" id="base-ant-note"></div>
+        </div>
+
+        <div class="slider-field">
+          <div class="slider-row">
+            <label>アンテナ高 (地上局)</label>
+            <span class="slider-val"><span id="v-h-base">4.0</span> m</span>
+          </div>
+          <input type="range" id="h-base" min="0.5" max="10" step="0.1" value="4">
+        </div>
+      </div>
+    </details>
+
+    <details class="panel" open>
+      <summary>04 · LoRa パラメータ</summary>
+      <div class="panel-body">
+        <div class="field">
+          <label>SF (拡散率)</label>
+          <div class="tab-row" id="sf-tabs">
+            <button data-v="7">SF7</button>
+            <button data-v="8">SF8</button>
+            <button data-v="9">SF9</button>
+            <button data-v="10" class="active">SF10</button>
+            <button data-v="11">SF11</button>
+            <button data-v="12">SF12</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>帯域幅 BW</label>
+          <div class="tab-row" id="bw-tabs">
+            <button data-v="125" class="active">125k</button>
+            <button data-v="250">250k</button>
+            <button data-v="500">500k</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>符号化率 CR</label>
+          <div class="tab-row" id="cr-tabs">
+            <button data-v="1" class="active">4/5</button>
+            <button data-v="2">4/6</button>
+            <button data-v="3">4/7</button>
+            <button data-v="4">4/8</button>
+          </div>
+        </div>
+
+        <div class="slider-field">
+          <div class="slider-row">
+            <label>ペイロード</label>
+            <span class="slider-val"><span id="v-payload">32</span> byte</span>
+          </div>
+          <input type="range" id="payload" min="1" max="255" step="1" value="32">
+        </div>
+
+        <div class="info-box">
+          <div>感度: <span class="mono" id="v-sens">-132</span> dBm</div>
+          <div>Bitrate: <span class="mono" id="v-rb-info">--</span> bps</div>
+          <div>ToA: <span class="mono" id="v-toa-info">--</span> ms</div>
+        </div>
+      </div>
+    </details>
+
+    <details class="panel">
+      <summary>05 · モデルオプション</summary>
+      <div class="panel-body">
+        <div class="toggle-field">
+          <label class="toggle">
+            <input type="checkbox" id="opt-tworay" checked>
+            <span>2波モデル(地面反射)</span>
+          </label>
+          <div class="hint">ON: 砂漠平坦地形での実環境近似</div>
+        </div>
+
+        <div id="tworay-options">
+          <div class="field">
+            <label>反射係数モデル</label>
+            <select id="gamma-mode">
+              <option value="pec">Γ=−1 (PEC · 保守的見積)</option>
+              <option value="fresnel" selected>Fresnel (誘電体地面)</option>
+            </select>
+          </div>
+          <div id="fresnel-options">
+            <div class="field">
+              <label>地表種別</label>
+              <select id="ground-preset">
+                <option value="dry_sand" selected>乾燥砂(砂漠) ε_r=3</option>
+                <option value="wet_sand">湿った砂 ε_r=10</option>
+                <option value="rock">岩盤 ε_r=6</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>偏波</label>
+              <div class="tab-row" id="pol-tabs">
+                <button data-v="V" class="active">垂直偏波 (V)</button>
+                <button data-v="H">水平偏波 (H)</button>
+              </div>
+              <div class="hint">垂直偏波: 長距離通信の標準。水平偏波: ブリュースター角で反射増大</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="toggle-field">
+          <label class="toggle">
+            <input type="checkbox" id="opt-fade" checked>
+            <span>フェージングマージン (+8dB)</span>
+          </label>
+          <div class="hint">小スケールフェージング・偏波ミスマッチ</div>
+        </div>
+        <div class="slider-field">
+          <div class="slider-row">
+            <label>目標マージン</label>
+            <span class="slider-val"><span id="v-margin-target">10</span> dB</span>
+          </div>
+          <input type="range" id="margin-target" min="0" max="20" step="1" value="10">
+        </div>
+      </div>
+    </details>
+  </aside>
+
+  <!-- CENTER: map + visualization + table -->
+  <section class="center-panel">
+
+    <div class="panel">
+      <div class="panel-header">
+        <span>06 · 地図 — 中継器配置</span>
+        <span class="tools">
+          <button id="btn-add-relay" class="mini">+ 中継器を追加</button>
+          <button id="btn-clear-relays" class="mini">中継器を全消去</button>
+          <span class="counter">中継器: <span id="relay-count">0</span> / 10</span>
+        </span>
+      </div>
+      <div class="panel-body" style="padding:0;">
+        <div id="map"></div>
+        <div class="map-hint">地図をクリックすると中継器を追加します(最大10台)。ピンをドラッグで位置調整、クリックで設定。</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <span>07 · 中継器設定</span>
+      </div>
+      <div class="panel-body">
+        <div id="relay-list"></div>
+        <div id="relay-empty" class="empty-state">中継器が配置されていません。地図をクリックして追加してください。</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <span>08 · リンク幾何学(高さ誇張表示)</span>
+      </div>
+      <div class="panel-body">
+        <svg id="geom" viewBox="0 0 720 220"></svg>
+        <div class="legend">
+          <span class="legend-item"><span class="leg-line direct"></span>直接波</span>
+          <span class="legend-item"><span class="leg-line reflected"></span>反射波</span>
+          <span class="legend-item"><span class="leg-ellipse"></span>フレネル第1ゾーン</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <span>09 · 区間別リンクバジェット</span>
+      </div>
+      <div class="panel-body">
+        <div class="table-wrap">
+          <table class="link-table">
+            <thead>
+              <tr>
+                <th>区間</th>
+                <th>距離</th>
+                <th>FSPL</th>
+                <th>2波</th>
+                <th>EIRP</th>
+                <th>Prx</th>
+                <th>感度</th>
+                <th>マージン</th>
+                <th>F1</th>
+                <th>バルジ</th>
+              </tr>
+            </thead>
+            <tbody id="hops-tbody"></tbody>
+          </table>
+        </div>
+        <div class="hint">単位: km / dB / dBm / m。マージン = Prx − 受信感度。</div>
+      </div>
+    </div>
+
+    <div class="panel" id="verdict-panel">
+      <div class="panel-header"><span>10 · 総合判定</span></div>
+      <div class="panel-body">
+        <div id="verdict-text">--</div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- RIGHT: recommendation engine -->
+  <aside class="right-panel">
+
+    <details class="panel" open>
+      <summary>11 · 制約・要件 (ヒアリング)</summary>
+      <div class="panel-body">
+        <div class="field">
+          <label>運用時間</label>
+          <select id="req-duration">
+            <option value="hours">数時間(スポット運用)</option>
+            <option value="day" selected>1日連続</option>
+            <option value="multiday">複数日</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>許容レイテンシ</label>
+          <select id="req-latency">
+            <option value="realtime">リアルタイム(<1s)</option>
+            <option value="near" selected>準リアルタイム(数秒)</option>
+            <option value="batch">バッチ(分単位)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>双方向通信</label>
+          <select id="req-bidir">
+            <option value="downlink">下り(テレメトリ)中心</option>
+            <option value="bidir" selected>双方向(コマンド+テレメトリ)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>機体側電源</label>
+          <select id="req-power">
+            <option value="tight">厳しい(電池数日)</option>
+            <option value="moderate" selected>普通</option>
+            <option value="ample">余裕あり</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>その他制約・備考(自由記述)</label>
+          <textarea id="req-notes" rows="3" placeholder="例: 現地天候、人員配置、競技ルール上の制約など"></textarea>
+        </div>
+        <button id="btn-rec" class="primary">推奨構成を生成</button>
+      </div>
+    </details>
+
+    <details class="panel" open>
+      <summary>12 · 推奨構成</summary>
+      <div class="panel-body">
+        <div id="rec-output" class="rec-output">
+          上の「推奨構成を生成」を押すと、現在の構成に対する推奨アクションを表示します。
+        </div>
+      </div>
+    </details>
+
+    <details class="panel">
+      <summary>13 · LLM拡張(任意)</summary>
+      <div class="panel-body">
+        <div class="hint">Anthropic APIキーをお持ちの場合、より詳細な推奨を生成できます。キーはブラウザ内のみで保持され、外部に送信されません(直接Anthropic APIに送信)。</div>
+        <div class="field">
+          <label>Anthropic API Key</label>
+          <input type="password" id="api-key" placeholder="sk-ant-...">
+        </div>
+        <button id="btn-rec-llm" class="primary">LLMで詳細推奨を生成</button>
+        <div id="llm-status" class="hint" style="margin-top: 8px;"></div>
+      </div>
+    </details>
+
+    <details class="panel">
+      <summary>14 · クイックガイド</summary>
+      <div class="panel-body">
+        <div class="guide">
+          <div class="guide-h">▎マージン < 0 dB</div>
+          <p>受信感度を下回る → 通信不可。SFを上げる/中継器追加/アンテナ高を上げる。</p>
+          <div class="guide-h">▎マージン 0〜10 dB</div>
+          <p>瞬間的にはつながるがフェージングで途切れる。長時間運用には不向き。</p>
+          <div class="guide-h">▎マージン > 10 dB</div>
+          <p>安定運用域。SF低減でデータレート向上の余地あり。</p>
+          <div class="guide-h amber">▎砂漠運用の落とし穴</div>
+          <p>・低アンテナ高では2波干渉でnullが発生<br>・地球曲率: 30km直接通信は両端で h ≥ ~18m 必要<br>・昼夜の温度差でフェージング増加</p>
+        </div>
+      </div>
+    </details>
+  </aside>
+
+</main>
+
+<footer class="bottom">
+  MODELS: FRIIS · TWO-RAY GROUND REFLECTION · FRESNEL · 4/3 EARTH · LoRa SX127x SENSITIVITY TABLE · HAVERSINE
+</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="data.js"></script>
+<script src="physics.js"></script>
+<script src="app.js"></script>
+
+</body>
+</html>

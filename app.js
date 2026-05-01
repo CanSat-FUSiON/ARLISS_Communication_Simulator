@@ -18,6 +18,9 @@ const state = {
   cr: 1,
   payload: 32,
   useTwoRay: true,
+  gammaMode: 'fresnel',    // 'pec' | 'fresnel'
+  groundPreset: 'dry_sand', // key into GROUND_PRESETS
+  pol: 'V',                // 'V' | 'H'
   includeFade: true,
   marginTarget: 10,
   // map / relays
@@ -246,11 +249,15 @@ function computeHops() {
     const b = nodes[i + 1];
     const d_m = haversine(a.lat, a.lon, b.lat, b.lon);
     const tx_dbm = state.txPwr; // assume same Tx power across hops (simplification)
+    const gamma_opts = (state.useTwoRay && state.gammaMode === 'fresnel')
+      ? { pol: state.pol, ...GROUND_PRESETS[state.groundPreset] }
+      : null;
     const m = compute_hop_metrics({
       d_m, h_a: a.h, h_b: b.h, f_hz,
       tx_dbm, g_tx: a.gain, l_tx: 1.0,
       g_rx: b.gain, l_rx: 1.5,
       sens_dbm: sens, use_tworay: state.useTwoRay, fade_db: fade,
+      gamma_opts,
     });
     hops.push({
       label: `${a.label} → ${b.label}`,
@@ -776,6 +783,9 @@ function validateConfig(cfg) {
   const cr = clampNum(s.cr, 1, 4, 1);
   const payload = clampNum(s.payload, 1, 255, 32);
   const useTwoRay = typeof s.useTwoRay === 'boolean' ? s.useTwoRay : true;
+  const gammaMode = oneOf(s.gammaMode, ['pec', 'fresnel'], 'fresnel');
+  const groundPreset = oneOf(s.groundPreset, Object.keys(GROUND_PRESETS), 'dry_sand');
+  const pol = oneOf(s.pol, ['V', 'H'], 'V');
   const includeFade = typeof s.includeFade === 'boolean' ? s.includeFade : true;
   const marginTarget = clampNum(s.marginTarget, 0, 20, 10);
 
@@ -811,7 +821,8 @@ function validateConfig(cfg) {
 
   const sanitized = {
     band, txPwr, txAntId, txGainCustom, rxAntId, rxGainCustom,
-    hCansat, hBase, hRelay, sf, bw, cr, payload, useTwoRay, includeFade, marginTarget,
+    hCansat, hBase, hRelay, sf, bw, cr, payload,
+    useTwoRay, gammaMode, groundPreset, pol, includeFade, marginTarget,
     cansat: { ...COORD_CANSAT },
     base: { ...COORD_BASE },
     relays,
@@ -885,6 +896,13 @@ function showLoadWarnings(warnings) {
   setTimeout(() => banner.remove(), 10000);
 }
 
+function updateTwoRayOptionsVisibility() {
+  const twoRayOn = state.useTwoRay;
+  document.getElementById('tworay-options').style.display = twoRayOn ? '' : 'none';
+  document.getElementById('fresnel-options').style.display =
+    (twoRayOn && state.gammaMode === 'fresnel') ? '' : 'none';
+}
+
 function reflectStateToUI() {
   document.getElementById('band').value = state.band;
   document.getElementById('tx-pwr').value = state.txPwr;
@@ -893,6 +911,10 @@ function reflectStateToUI() {
   document.getElementById('payload').value = state.payload;
   document.getElementById('margin-target').value = state.marginTarget;
   document.getElementById('opt-tworay').checked = state.useTwoRay;
+  document.getElementById('gamma-mode').value = state.gammaMode || 'fresnel';
+  document.getElementById('ground-preset').value = state.groundPreset || 'dry_sand';
+  document.querySelectorAll('#pol-tabs button').forEach(b => b.classList.toggle('active', b.dataset.v === (state.pol || 'V')));
+  updateTwoRayOptionsVisibility();
   document.getElementById('opt-fade').checked = state.includeFade;
   document.querySelectorAll('#sf-tabs button').forEach(b => b.classList.toggle('active', parseInt(b.dataset.v) === state.sf));
   document.querySelectorAll('#bw-tabs button').forEach(b => b.classList.toggle('active', parseInt(b.dataset.v) === state.bw));
@@ -915,7 +937,8 @@ function resetAll() {
     rxAntId: 'yagi-9el', rxGainCustom: 12.0,
     hCansat: 0.3, hBase: 4.0, hRelay: 2.0,
     sf: 10, bw: 125, cr: 1, payload: 32,
-    useTwoRay: true, includeFade: true, marginTarget: 10,
+    useTwoRay: true, gammaMode: 'fresnel', groundPreset: 'dry_sand', pol: 'V',
+    includeFade: true, marginTarget: 10,
     cansat: { ...COORD_CANSAT }, base: { ...COORD_BASE },
     req: { duration: 'day', latency: 'near', bidir: 'bidir', power: 'moderate', notes: '' },
   });
@@ -963,7 +986,25 @@ function bindAll() {
   });
   document.getElementById('opt-tworay').addEventListener('change', (e) => {
     state.useTwoRay = e.target.checked;
+    updateTwoRayOptionsVisibility();
     recompute();
+  });
+  document.getElementById('gamma-mode').addEventListener('change', (e) => {
+    state.gammaMode = e.target.value;
+    document.getElementById('fresnel-options').style.display = state.gammaMode === 'fresnel' ? '' : 'none';
+    recompute();
+  });
+  document.getElementById('ground-preset').addEventListener('change', (e) => {
+    state.groundPreset = e.target.value;
+    recompute();
+  });
+  document.querySelectorAll('#pol-tabs button').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('#pol-tabs button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      state.pol = b.dataset.v;
+      recompute();
+    });
   });
   document.getElementById('opt-fade').addEventListener('change', (e) => {
     state.includeFade = e.target.checked;
@@ -1034,6 +1075,7 @@ function bindAll() {
 document.addEventListener('DOMContentLoaded', () => {
   rebuildAntennaSelects();
   bindAll();
+  updateTwoRayOptionsVisibility();
   initMap();
   recompute();
 });

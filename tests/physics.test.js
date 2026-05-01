@@ -139,3 +139,45 @@ test('compute_hop_metrics: two-ray mode gives higher loss than FSPL at long rang
   const tworay_m = p.compute_hop_metrics({ ...base, use_tworay: true });
   assert.ok(tworay_m.margin < fspl_m.margin, 'Two-ray should give lower margin (more loss) at long range with low antennas');
 });
+
+// ── Fresnel reflection coefficient ───────────────────────────────────────────
+
+test('fresnel_reflect: V-pol at Brewster angle (ε_r=3, σ=0) → |Γ_V| ≈ 0', () => {
+  // Brewster angle from horizontal = atan(1/sqrt(ε_r)) for lossless dielectric
+  // For ε_r=3: ψ_B = atan(1/sqrt(3)) ≈ 30°
+  const psi_B = Math.atan(1 / Math.sqrt(3)); // ~30°
+  const ref = p.fresnel_reflect(psi_B, 920e6, 3.0, 0);
+  const magV = Math.sqrt(ref.V.r**2 + ref.V.i**2);
+  assert.ok(magV < 0.01, `|Γ_V| at Brewster angle should be ~0, got ${magV.toFixed(6)}`);
+});
+
+test('fresnel_reflect: H-pol at Brewster angle → |Γ_H| ≈ 0.5 (significant unlike V-pol)', () => {
+  // For ε_r=3 at Brewster angle ψ=30°: Γ_H = (0.5-1.5)/(0.5+1.5) = -0.5, |Γ_H| = 0.5
+  const psi_B = Math.atan(1 / Math.sqrt(3));
+  const ref = p.fresnel_reflect(psi_B, 920e6, 3.0, 0);
+  const magH = Math.sqrt(ref.H.r**2 + ref.H.i**2);
+  assert.ok(magH >= 0.45, `|Γ_H| at Brewster angle should be ~0.5 (significant), got ${magH.toFixed(4)}`);
+});
+
+test('fresnel_reflect: dry sand with small conductivity → |Γ_V| still near-zero at Brewster angle', () => {
+  const psi_B = Math.atan(1 / Math.sqrt(3));
+  const ref = p.fresnel_reflect(psi_B, 920e6, p.GROUND_PRESETS.dry_sand.eps_r, p.GROUND_PRESETS.dry_sand.sigma);
+  const magV = Math.sqrt(ref.V.r**2 + ref.V.i**2);
+  assert.ok(magV < 0.1, `|Γ_V| at Brewster angle (dry sand) should be small, got ${magV.toFixed(4)}`);
+});
+
+test('tworay_db: PEC and Fresnel V-pol agree at extreme grazing (long range)', () => {
+  // At 35km with very low antennas, grazing angle is tiny → Γ_V ≈ -1 ≈ PEC
+  const pec = p.tworay_db(35000, 0.3, 4, 920e6, null);
+  const fresnel = p.tworay_db(35000, 0.3, 4, 920e6, { pol: 'V', eps_r: 3, sigma: 1e-4 });
+  assert.ok(
+    Math.abs(pec - fresnel) < 3.0,
+    `PEC (${pec.toFixed(2)} dB) and Fresnel V (${fresnel.toFixed(2)} dB) should agree at extreme grazing`,
+  );
+});
+
+test('tworay_db: existing validation vector preserved in PEC mode', () => {
+  // Ensure PEC behavior (gamma_opts = null) still matches original spec
+  const v = p.tworay_db(30000, 0.3, 4, 920e6, null);
+  assert.ok(Math.abs(v - 177.5) < 3, `PEC mode should still give ~177.5 dB, got ${v.toFixed(2)}`);
+});
