@@ -16,6 +16,7 @@
     <div class="sub">BLACK ROCK DESERT · NV · ARLISS</div>
   </div>
   <div class="topbar-actions">
+    <button id="btn-theme" class="ghost" title="ライト/ダークテーマ切替">◑ DARK</button>
     <button id="btn-save" class="ghost">⬇ JSON保存</button>
     <label for="file-load" class="ghost">⬆ JSON読込</label>
     <input type="file" id="file-load" accept=".json" style="display:none;">
@@ -222,6 +223,14 @@
 
         <div class="toggle-field">
           <label class="toggle">
+            <input type="checkbox" id="opt-map-tap" checked>
+            <span>地図タップで中継器追加</span>
+          </label>
+          <div class="hint">OFFにするとボタン「+ 中継器を追加」経由のみ追加可(タッチ誤操作防止)</div>
+        </div>
+
+        <div class="toggle-field">
+          <label class="toggle">
             <input type="checkbox" id="opt-fade" checked>
             <span>フェージングマージン (+8dB)</span>
           </label>
@@ -258,17 +267,7 @@
 
     <div class="panel">
       <div class="panel-header">
-        <span>07 · 中継器設定</span>
-      </div>
-      <div class="panel-body">
-        <div id="relay-list"></div>
-        <div id="relay-empty" class="empty-state">中継器が配置されていません。地図をクリックして追加してください。</div>
-      </div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-header">
-        <span>08 · リンク幾何学(高さ誇張表示)</span>
+        <span>07 · リンク幾何学(高さ誇張表示)</span>
       </div>
       <div class="panel-body">
         <svg id="geom" viewBox="0 0 720 220"></svg>
@@ -277,6 +276,16 @@
           <span class="legend-item"><span class="leg-line reflected"></span>反射波</span>
           <span class="legend-item"><span class="leg-ellipse"></span>フレネル第1ゾーン</span>
         </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <span>08 · 中継器設定</span>
+      </div>
+      <div class="panel-body">
+        <div id="relay-list"></div>
+        <div id="relay-empty" class="empty-state">中継器が配置されていません。地図をクリックして追加してください。</div>
       </div>
     </div>
 

@@ -23,6 +23,7 @@ const state = {
   groundPreset: 'dry_sand', // key into GROUND_PRESETS
   pol: 'V',                // 'V' | 'H'
   includeFade: true,
+  mapTapAdd: true,         // false = button-only relay addition (touch-safe mode)
   marginTarget: 10,
   // map / relays
   cansat: { ...COORD_CANSAT },
@@ -135,8 +136,9 @@ function initMap() {
     .addTo(map)
     .bindPopup(`<strong>地上局 (終点)</strong><br>${state.base.lat.toFixed(6)}, ${state.base.lon.toFixed(6)}`);
 
-  // Map click → add relay
+  // Map click → add relay (guarded by mapTapAdd setting)
   map.on('click', (e) => {
+    if (!state.mapTapAdd) return;
     if (state.relays.length >= MAX_RELAYS) {
       alert(`中継器は最大 ${MAX_RELAYS} 台までです`);
       return;
@@ -158,7 +160,8 @@ function addRelay(lat, lon) {
     h: state.hRelay,
     antId: defaultAnt.id,
     gainCustom: 2.0,
-    azimuth: null, // null = auto-computed bearing toward next node
+    azimuth: null,    // null = auto-computed bearing toward next node
+    displayNum: null, // set by updateRelayDisplayNums() in recompute
   };
   state.relays.push(relay);
   drawRelayOnMap(relay);
@@ -181,7 +184,8 @@ function drawRelayOnMap(relay) {
 }
 
 function buildRelayPopup(relay) {
-  return `<strong>中継器 R${relay.id}</strong><br>${relay.lat.toFixed(5)}, ${relay.lon.toFixed(5)}<br>高さ: ${relay.h.toFixed(1)}m<br><button onclick="removeRelay(${relay.id})" style="margin-top:6px;font-size:10px;padding:2px 8px;">削除</button>`;
+  const num = relay.displayNum ?? '?';
+  return `<strong>中継器 R${num}</strong><br>${relay.lat.toFixed(5)}, ${relay.lon.toFixed(5)}<br>高さ: ${relay.h.toFixed(1)}m<br><button onclick="removeRelay(${relay.id})" style="margin-top:6px;font-size:10px;padding:2px 8px;">削除</button>`;
 }
 
 function removeRelay(id) {
@@ -201,6 +205,17 @@ function clearAllRelays() {
   state.relays = [];
   relayMarkers = {};
   recompute();
+}
+
+// Assign display numbers (R1, R2, …) to relays in CanSat-adjacent order.
+// Must be called before renderRelayList / computeHops use the labels.
+function updateRelayDisplayNums() {
+  state.relays.forEach(r => { r.displayNum = null; });
+  orderedRelays().forEach((r, i) => { r.displayNum = i + 1; });
+  // Refresh map popup content so pins show the correct Rn number
+  state.relays.forEach(r => {
+    if (relayMarkers[r.id]) relayMarkers[r.id].setPopupContent(buildRelayPopup(r));
+  });
 }
 
 // Order relays using Held-Karp DP for minimum total path length (CanSat→relays→Base).
@@ -284,7 +299,7 @@ function computeHops() {
     ...ordered.map(r => ({
       type: 'relay', lat: r.lat, lon: r.lon, h: r.h,
       gain: antennaGain(r.antId, r.gainCustom),
-      ant: getAnt(r.antId), azimuth: r.azimuth, label: `中継R${r.id}`, relay: r,
+      ant: getAnt(r.antId), azimuth: r.azimuth, label: `中継R${r.displayNum}`, relay: r,
     })),
     { type: 'base', lat: state.base.lat, lon: state.base.lon, h: state.hBase,
       gain: antennaGain(state.rxAntId, state.rxGainCustom),
@@ -338,6 +353,7 @@ function computeHops() {
 
 // ------------------- Render -------------------
 function recompute() {
+  updateRelayDisplayNums();
   const hops = computeHops();
   const worst = hops.reduce((w, h) => (w === null || h.margin < w.margin) ? h : w, null);
   const rb = lora_bitrate(state.sf, state.bw, state.cr);
@@ -500,7 +516,7 @@ function renderRelayList() {
     const azVal = r.azimuth !== null ? r.azimuth : 0;
     return `<div class="relay-card" data-id="${r.id}">
       <div class="relay-card-head">
-        <span class="relay-card-title">中継器 R${r.id}</span>
+        <span class="relay-card-title">中継器 R${r.displayNum}</span>
         <span class="relay-card-coord">${r.lat.toFixed(5)}, ${r.lon.toFixed(5)}</span>
       </div>
       <div class="relay-card-grid">
@@ -880,6 +896,7 @@ function validateConfig(cfg) {
   const rxAzimuth = (s.rxAzimuth === null || s.rxAzimuth === undefined)
     ? null : clampNum(s.rxAzimuth, 0, 359, null);
   const includeFade = typeof s.includeFade === 'boolean' ? s.includeFade : true;
+  const mapTapAdd = typeof s.mapTapAdd === 'boolean' ? s.mapTapAdd : true;
   const marginTarget = clampNum(s.marginTarget, 0, 20, 10);
 
   // Validate relays array
@@ -917,7 +934,7 @@ function validateConfig(cfg) {
   const sanitized = {
     band, txPwr, txAntId, txGainCustom, rxAntId, rxGainCustom,
     hCansat, hBase, hRelay, sf, bw, cr, payload,
-    useTwoRay, gammaMode, groundPreset, pol, rxAzimuth, includeFade, marginTarget,
+    useTwoRay, gammaMode, groundPreset, pol, rxAzimuth, includeFade, mapTapAdd, marginTarget,
     cansat: { ...COORD_CANSAT },
     base: { ...COORD_BASE },
     relays,
@@ -1063,6 +1080,7 @@ function reflectStateToUI() {
   document.getElementById('ground-preset').value = state.groundPreset || 'dry_sand';
   document.querySelectorAll('#pol-tabs button').forEach(b => b.classList.toggle('active', b.dataset.v === (state.pol || 'V')));
   updateTwoRayOptionsVisibility();
+  document.getElementById('opt-map-tap').checked = state.mapTapAdd !== false;
   document.getElementById('opt-fade').checked = state.includeFade;
   document.querySelectorAll('#sf-tabs button').forEach(b => b.classList.toggle('active', parseInt(b.dataset.v) === state.sf));
   document.querySelectorAll('#bw-tabs button').forEach(b => b.classList.toggle('active', parseInt(b.dataset.v) === state.bw));
@@ -1095,7 +1113,7 @@ function resetAll() {
     hCansat: 0.3, hBase: 4.0, hRelay: 2.0,
     sf: 10, bw: 125, cr: 1, payload: 32,
     useTwoRay: true, gammaMode: 'fresnel', groundPreset: 'dry_sand', pol: 'V',
-    rxAzimuth: null, includeFade: true, marginTarget: 10,
+    rxAzimuth: null, includeFade: true, mapTapAdd: true, marginTarget: 10,
     cansat: { ...COORD_CANSAT }, base: { ...COORD_BASE },
     req: { duration: 'day', latency: 'near', bidir: 'bidir', power: 'moderate', notes: '' },
   });
@@ -1176,6 +1194,10 @@ function bindAll() {
       recompute();
     });
   });
+  document.getElementById('opt-map-tap').addEventListener('change', (e) => {
+    state.mapTapAdd = e.target.checked;
+  });
+
   document.getElementById('opt-fade').addEventListener('change', (e) => {
     state.includeFade = e.target.checked;
     recompute();
@@ -1222,6 +1244,9 @@ function bindAll() {
     if (confirm('中継器をすべて削除しますか?')) clearAllRelays();
   });
 
+  // Theme
+  document.getElementById('btn-theme').addEventListener('click', toggleTheme);
+
   // Save/load
   document.getElementById('btn-save').addEventListener('click', saveConfig);
   document.getElementById('file-load').addEventListener('change', (e) => {
@@ -1241,8 +1266,30 @@ function bindAll() {
   document.getElementById('btn-rec-llm').addEventListener('click', generateLLMRecommendation);
 }
 
+// ------------------- Theme -------------------
+function initTheme() {
+  const saved = localStorage.getItem('arliss-theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', saved === 'light' ? 'light' : 'dark');
+  updateThemeButton();
+}
+function updateThemeButton() {
+  const btn = document.getElementById('btn-theme');
+  if (!btn) return;
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  btn.textContent = isLight ? '◑ DARK' : '◑ LIGHT';
+  btn.title = isLight ? 'ダークテーマに切替' : 'ライトテーマに切替';
+}
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme');
+  const next = current === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('arliss-theme', next);
+  updateThemeButton();
+}
+
 // ------------------- Init -------------------
 document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
   rebuildAntennaSelects();
   bindAll();
   updateTwoRayOptionsVisibility();
