@@ -640,12 +640,66 @@ select:focus, input:focus, textarea:focus {
   font-size: 11px;
 }
 .relay-card-grid .field { margin-bottom: 0; }
+
+/* Relay height drag scrubber */
+.relay-h-scrubber {
+  cursor: ns-resize;
+  display: inline-block;
+  color: var(--phosphor);
+  user-select: none;
+  font-size: 11px;
+  padding: 1px 0;
+  border-bottom: 1px dashed var(--phosphor);
+  opacity: 0.85;
+  transition: opacity 0.1s;
+}
+.relay-h-scrubber:hover { opacity: 1; }
+.relay-h-scrubber:active { cursor: ns-resize; opacity: 1; }
+
+/* Relay bulk height bar */
+.relay-bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--panel-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--amber);
+  border-radius: 2px;
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+.relay-bulk-label {
+  flex: none;
+  color: var(--amber);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.relay-bulk-bar input[type="range"] { flex: 1; min-width: 0; }
+.relay-bulk-bar #v-relay-bulk-h {
+  flex: none;
+  color: var(--phosphor);
+  font-family: var(--mono);
+  font-size: 11px;
+  min-width: 2.5em;
+  text-align: right;
+}
+
 .empty-state {
   text-align: center;
   font-size: 11px;
   color: var(--ink-3);
   padding: 16px;
   font-style: italic;
+}
+
+/* Geometry drag hint in legend */
+.geom-drag-hint {
+  margin-left: auto;
+  color: var(--ink-3);
+  font-style: italic;
+  font-size: 10px;
 }
 
 /* SVG geometry */

@@ -5,7 +5,11 @@
       "Bash(npm test *)",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "Bash(node --test tests/physics.test.js)"
+      "Bash(node --test tests/physics.test.js)",
+      "Bash(Get-ChildItem -Recurse -Force)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(Sort-Object)",
+      "Bash(node -e ' *)"
     ]
   }
 }

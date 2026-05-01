@@ -40,6 +40,9 @@ const state = {
 };
 
 let nextRelayId = 1;
+let _geomDrag = null;
+let _relayHDrag = null;
+let _geomSelected = null; // { type:'cansat'|'relay'|'base', relayId:null|number }
 let map, cansatMarker, baseMarker, relayMarkers = {}, pathLine;
 
 // ------------------- Antenna helpers -------------------
@@ -495,12 +498,21 @@ function renderVerdict(hops, worst, rb) {
 function renderRelayList() {
   const list = document.getElementById('relay-list');
   const empty = document.getElementById('relay-empty');
+  const bulkBar = document.getElementById('relay-bulk-bar');
   if (state.relays.length === 0) {
     list.innerHTML = '';
     empty.style.display = '';
+    if (bulkBar) bulkBar.style.display = 'none';
     return;
   }
   empty.style.display = 'none';
+  if (bulkBar) {
+    bulkBar.style.display = '';
+    const bulkSlider = document.getElementById('relay-bulk-h');
+    const bulkVal = document.getElementById('v-relay-bulk-h');
+    if (bulkSlider) bulkSlider.value = state.hRelay;
+    if (bulkVal) bulkVal.textContent = state.hRelay.toFixed(1);
+  }
   list.innerHTML = orderedRelays().map(r => {
     const opts = antennasFor('relay', state.band);
     // Fallback: if current antId is no longer available in the selected band, reset to first
@@ -525,8 +537,8 @@ function renderRelayList() {
           <select onchange="updateRelayAnt(${r.id}, this.value)">${antOpts}</select>
         </div>
         <div class="field">
-          <label>高さ ${r.h.toFixed(1)} m</label>
-          <input type="range" min="0.3" max="6" step="0.1" value="${r.h}" oninput="updateRelayH(${r.id}, parseFloat(this.value))">
+          <label class="relay-h-scrubber" data-relay-id="${r.id}" title="上下ドラッグで高さ調整">↕ 高さ <span class="relay-h-value">${r.h.toFixed(1)}</span> m</label>
+          <input type="range" min="0.3" max="6" step="0.1" value="${r.h}" class="relay-h-slider" data-relay-id="${r.id}" oninput="updateRelayH(${r.id}, parseFloat(this.value))">
         </div>
       </div>
       ${showAz ? `<div class="field" style="margin-top:6px;">
@@ -550,6 +562,11 @@ window.updateRelayH = function(id, h) {
   const r = state.relays.find(x => x.id === id);
   if (r) { r.h = h; recompute(); }
 };
+window.updateRelayHAll = function(h) {
+  state.hRelay = h;
+  state.relays.forEach(r => { r.h = h; });
+  recompute();
+};
 window.updateRelayAzimuth = function(id, az) {
   const r = state.relays.find(x => x.id === id);
   if (!r) return;
@@ -565,10 +582,10 @@ function drawGeometry(hops) {
   const svg = document.getElementById('geom');
   const W = 720, H = 220;
   const groundY = H - 36;
-  const padding = 30;
+  const padding = 50;
   const innerW = W - 2 * padding;
   const N = hops.length + 1;
-  const xs = Array.from({length: N}, (_, i) => padding + (innerW * i) / Math.max(N - 1, 1));
+
   // Heights: build from hops
   const heights = [];
   if (hops.length > 0) {
@@ -579,9 +596,27 @@ function drawGeometry(hops) {
   const hScale = 70 / maxH;
   const ys = heights.map(h => groundY - h * hScale);
 
+  // X positions: proportional to cumulative distances (not equal spacing)
+  const cumDist = [0];
+  hops.forEach(h => cumDist.push(cumDist[cumDist.length - 1] + h.d_m));
+  const totalDist = cumDist[cumDist.length - 1] || 1;
+  const xs = cumDist.map(d => padding + innerW * (d / totalDist));
+
   const labels = ['CanSat'];
-  for (let i = 0; i < hops.length - 1; i++) labels.push(`R${i+1}`);
+  for (let i = 0; i < hops.length - 1; i++) labels.push(`R${i + 1}`);
   if (hops.length > 0) labels.push('Base');
+
+  // Resolve selected node index in current layout
+  let selIdx = -1;
+  if (_geomSelected) {
+    if (_geomSelected.type === 'cansat') selIdx = 0;
+    else if (_geomSelected.type === 'base') selIdx = N - 1;
+    else {
+      const ord = orderedRelays();
+      const rIdx = ord.findIndex(r => r.id === _geomSelected.relayId);
+      if (rIdx >= 0) selIdx = rIdx + 1;
+    }
+  }
 
   let svgContent = '';
   svgContent += `<defs>
@@ -595,39 +630,253 @@ function drawGeometry(hops) {
     </linearGradient>
   </defs>`;
   svgContent += `<rect width="${W}" height="${groundY}" fill="url(#sky)"/>`;
-  svgContent += `<rect y="${groundY}" width="${W}" height="${H-groundY}" fill="url(#ground)"/>`;
+  svgContent += `<rect y="${groundY}" width="${W}" height="${H - groundY}" fill="url(#ground)"/>`;
   // Earth curvature hint
-  svgContent += `<path d="M ${padding} ${groundY} Q ${W/2} ${groundY+5} ${W-padding} ${groundY}" fill="none" stroke="#ffb84d" stroke-width="0.5" stroke-dasharray="2 3" opacity="0.5"/>`;
+  svgContent += `<path d="M ${padding} ${groundY} Q ${W / 2} ${groundY + 5} ${W - padding} ${groundY}" fill="none" stroke="#ffb84d" stroke-width="0.5" stroke-dasharray="2 3" opacity="0.5"/>`;
 
   // Hops
   for (let i = 0; i < hops.length; i++) {
-    const x1 = xs[i], x2 = xs[i+1], y1 = ys[i], y2 = ys[i+1];
+    const x1 = xs[i], x2 = xs[i + 1], y1 = ys[i], y2 = ys[i + 1];
     const hop = hops[i];
     const ok = hop.margin >= 0;
     const directColor = ok ? '#7fffb0' : '#f87171';
 
     // Reflected
-    svgContent += `<path d="M ${x1} ${y1} L ${(x1+x2)/2} ${groundY} L ${x2} ${y2}" fill="none" stroke="#ffb84d" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/>`;
+    svgContent += `<path d="M ${x1} ${y1} L ${(x1 + x2) / 2} ${groundY} L ${x2} ${y2}" fill="none" stroke="#ffb84d" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/>`;
     // Direct
     svgContent += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${directColor}" stroke-width="1.5"/>`;
     // Fresnel
-    const cx = (x1+x2)/2, cy = (y1+y2)/2;
-    const rx = (x2-x1)/2;
+    const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+    const rx = (x2 - x1) / 2;
     const ry = Math.min(35, hop.F1 * hScale * 1.0);
     svgContent += `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="none" stroke="#7fffb0" stroke-width="0.5" stroke-dasharray="1 2" opacity="0.3"/>`;
     // Distance label
-    svgContent += `<text x="${(x1+x2)/2}" y="${groundY-3}" text-anchor="middle" font-size="9" fill="#6a8478" font-family="monospace">${hop.d_km.toFixed(1)}km · ${hop.margin >= 0 ? '+' : ''}${hop.margin.toFixed(1)}dB</text>`;
+    svgContent += `<text x="${(x1 + x2) / 2}" y="${groundY - 3}" text-anchor="middle" font-size="9" fill="#6a8478" font-family="monospace">${hop.d_km.toFixed(1)}km · ${hop.margin >= 0 ? '+' : ''}${hop.margin.toFixed(1)}dB</text>`;
   }
 
-  // Nodes
+  // Nodes with drag hit areas
   for (let i = 0; i < N; i++) {
+    const isRelay = i > 0 && i < N - 1;
+    const dragCursor = isRelay ? 'move' : 'ns-resize';
     svgContent += `<line x1="${xs[i]}" y1="${groundY}" x2="${xs[i]}" y2="${ys[i]}" stroke="#6a8478" stroke-width="1"/>`;
     svgContent += `<circle cx="${xs[i]}" cy="${ys[i]}" r="5" fill="#7fffb0" stroke="#0a0e0d" stroke-width="1.5"/>`;
-    svgContent += `<text x="${xs[i]}" y="${ys[i]-10}" text-anchor="middle" font-size="10" fill="#7fffb0" font-family="monospace">${labels[i]}</text>`;
-    svgContent += `<text x="${xs[i]}" y="${groundY+14}" text-anchor="middle" font-size="9" fill="#6a8478" font-family="monospace">h=${heights[i].toFixed(2)}m</text>`;
+    // Transparent hit area (larger radius for easier drag targeting)
+    svgContent += `<circle cx="${xs[i]}" cy="${ys[i]}" r="12" fill="transparent" data-drag-node="${i}" style="cursor:${dragCursor}"/>`;
+    svgContent += `<text x="${xs[i]}" y="${ys[i] - 10}" text-anchor="middle" font-size="10" fill="#7fffb0" font-family="monospace">${labels[i]}</text>`;
+    svgContent += `<text x="${xs[i]}" y="${groundY + 14}" text-anchor="middle" font-size="9" fill="#6a8478" font-family="monospace">h=${heights[i].toFixed(2)}m</text>`;
+  }
+
+  // Selection ring + key hint (drawn last → on top, pointer-events:none so hit area still works)
+  if (selIdx >= 0 && xs[selIdx] !== undefined) {
+    svgContent += `<circle cx="${xs[selIdx]}" cy="${ys[selIdx]}" r="10" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="3 2" opacity="0.9" pointer-events="none"/>`;
+    const isRelayNode = selIdx > 0 && selIdx < N - 1;
+    const hint = isRelayNode
+      ? '↑↓ 高さ  ←→ 距離  Shift=×5  ESC=解除'
+      : '↑↓ 高さ  Shift=×5  ESC=解除';
+    svgContent += `<text x="${W / 2}" y="13" text-anchor="middle" font-size="8.5" fill="#fbbf24" font-family="monospace" opacity="0.75" pointer-events="none">${hint}</text>`;
   }
 
   svg.innerHTML = svgContent;
+}
+
+// ------------------- Geometry drag (07) -------------------
+function initGeometryDrag() {
+  const svg = document.getElementById('geom');
+
+  svg.addEventListener('mousedown', (e) => {
+    const target = e.target.closest('[data-drag-node]');
+
+    // Click on SVG background → deselect
+    if (!target) {
+      if (_geomSelected) { _geomSelected = null; recompute(); }
+      return;
+    }
+
+    const nodeIdx = parseInt(target.getAttribute('data-drag-node'));
+    const hops = computeHops();
+    if (hops.length === 0) return;
+
+    const N = hops.length + 1;
+    const heights = [hops[0].h_a, ...hops.map(h => h.h_b)];
+    const maxH = Math.max(1, ...heights);
+    const hScale = 70 / maxH;
+
+    const padding = 50, innerW = 720 - 2 * padding;
+    const cumDist = [0];
+    hops.forEach(h => cumDist.push(cumDist[cumDist.length - 1] + h.d_m));
+    const totalDist = cumDist[cumDist.length - 1] || 1;
+    const xs = cumDist.map(d => padding + innerW * (d / totalDist));
+
+    const isRelay = nodeIdx > 0 && nodeIdx < N - 1;
+    const relayRef = isRelay ? orderedRelays()[nodeIdx - 1] : null;
+    _geomDrag = {
+      nodeIdx, N, relayRef,
+      startX: e.clientX, startY: e.clientY,
+      origH: heights[nodeIdx],
+      origXFrac: (xs[nodeIdx] - padding) / innerW,
+      hScale, innerW,
+      moved: false,
+    };
+    e.preventDefault();
+    document.body.style.userSelect = 'none';
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!_geomDrag) return;
+    const svgEl = document.getElementById('geom');
+    const rect = svgEl.getBoundingClientRect();
+    const scaleX = 720 / rect.width;
+    const scaleY = 220 / rect.height;
+
+    const { nodeIdx, N, relayRef, startX, startY, origH, origXFrac, hScale, innerW } = _geomDrag;
+    const dx = (e.clientX - startX) * scaleX;
+    const dy = (e.clientY - startY) * scaleY;
+
+    if (Math.abs(e.clientX - startX) > 3 || Math.abs(e.clientY - startY) > 3) _geomDrag.moved = true;
+
+    // Modifier key axis locking (evaluated live so user can press/release during drag):
+    //   Shift → height only (suppress horizontal)
+    //   Alt / Ctrl → distance only (suppress vertical)
+    const lockH = e.shiftKey && !e.altKey && !e.ctrlKey;  // lock horizontal axis
+    const lockV = (e.altKey || e.ctrlKey) && !e.shiftKey; // lock vertical axis
+
+    // Vertical axis → height
+    if (!lockV) {
+      const newH = origH - dy / hScale;
+      if (nodeIdx === 0) {
+        state.hCansat = Math.min(3, Math.max(0.05, newH));
+        const el = document.getElementById('h-cansat');
+        if (el) el.value = state.hCansat;
+      } else if (nodeIdx === N - 1) {
+        state.hBase = Math.min(10, Math.max(0.5, newH));
+        const el = document.getElementById('h-base');
+        if (el) el.value = state.hBase;
+      } else if (relayRef) {
+        relayRef.h = Math.min(6, Math.max(0.3, newH));
+      }
+    }
+
+    // Horizontal axis → relay position along CanSat→Base (relay only)
+    if (!lockH && relayRef) {
+      const newFrac = Math.max(0.05, Math.min(0.95, origXFrac + dx / innerW));
+      relayRef.lat = state.cansat.lat + (state.base.lat - state.cansat.lat) * newFrac;
+      relayRef.lon = state.cansat.lon + (state.base.lon - state.cansat.lon) * newFrac;
+      if (relayMarkers[relayRef.id]) relayMarkers[relayRef.id].setLatLng([relayRef.lat, relayRef.lon]);
+    }
+
+    recompute();
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (!_geomDrag) return;
+    if (!_geomDrag.moved) {
+      // Click (no drag): toggle selection on the node
+      const { nodeIdx, N, relayRef } = _geomDrag;
+      const type = relayRef ? 'relay' : (nodeIdx === 0 ? 'cansat' : 'base');
+      const relayId = relayRef ? relayRef.id : null;
+      const alreadySel = _geomSelected && _geomSelected.type === type && _geomSelected.relayId === relayId;
+      _geomSelected = alreadySel ? null : { type, relayId };
+      recompute();
+    }
+    _geomDrag = null;
+    document.body.style.userSelect = '';
+  });
+
+  // Arrow key adjustments for selected node
+  window.addEventListener('keydown', (e) => {
+    if (!_geomSelected) return;
+    // Don't consume arrow keys when an input/select has focus
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+
+    const isArrow = e.key.startsWith('Arrow');
+    if (!isArrow && e.key !== 'Escape') return;
+    e.preventDefault();
+
+    if (e.key === 'Escape') {
+      _geomSelected = null;
+      recompute();
+      return;
+    }
+
+    // Shift = ×5 step size
+    const hStep  = e.shiftKey ? 0.5  : 0.1;   // metres
+    const pStep  = e.shiftKey ? 0.10 : 0.02;  // fraction of CanSat→Base path
+
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      const delta = e.key === 'ArrowUp' ? hStep : -hStep;
+      if (_geomSelected.type === 'cansat') {
+        state.hCansat = Math.min(3, Math.max(0.05, state.hCansat + delta));
+        const el = document.getElementById('h-cansat');
+        if (el) el.value = state.hCansat;
+      } else if (_geomSelected.type === 'base') {
+        state.hBase = Math.min(10, Math.max(0.5, state.hBase + delta));
+        const el = document.getElementById('h-base');
+        if (el) el.value = state.hBase;
+      } else {
+        const relay = state.relays.find(r => r.id === _geomSelected.relayId);
+        if (relay) relay.h = Math.min(6, Math.max(0.3, relay.h + delta));
+      }
+      recompute();
+    }
+
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && _geomSelected.type === 'relay') {
+      const relay = state.relays.find(r => r.id === _geomSelected.relayId);
+      if (!relay) return;
+      const directDist = haversine(state.cansat.lat, state.cansat.lon, state.base.lat, state.base.lon);
+      if (directDist === 0) return;
+      const curFrac = haversine(state.cansat.lat, state.cansat.lon, relay.lat, relay.lon) / directDist;
+      const newFrac = Math.max(0.05, Math.min(0.95, curFrac + (e.key === 'ArrowRight' ? pStep : -pStep)));
+      relay.lat = state.cansat.lat + (state.base.lat - state.cansat.lat) * newFrac;
+      relay.lon = state.cansat.lon + (state.base.lon - state.cansat.lon) * newFrac;
+      if (relayMarkers[relay.id]) relayMarkers[relay.id].setLatLng([relay.lat, relay.lon]);
+      recompute();
+    }
+  });
+}
+
+// ------------------- Relay height scrubber drag (08) -------------------
+function initRelayHeightDrag() {
+  const list = document.getElementById('relay-list');
+
+  list.addEventListener('mousedown', (e) => {
+    const target = e.target.closest('.relay-h-scrubber');
+    if (!target) return;
+    const relayId = parseInt(target.getAttribute('data-relay-id'));
+    const relay = state.relays.find(r => r.id === relayId);
+    if (!relay) return;
+
+    _relayHDrag = { relayId, startY: e.clientY, origH: relay.h };
+    e.preventDefault();
+    document.body.style.userSelect = 'none';
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!_relayHDrag) return;
+    const relay = state.relays.find(r => r.id === _relayHDrag.relayId);
+    if (!relay) { _relayHDrag = null; return; }
+
+    // Drag up = increase height (inverted Y axis)
+    const dy = _relayHDrag.startY - e.clientY;
+    relay.h = Math.max(0.3, Math.min(6, _relayHDrag.origH + dy * 0.05));
+
+    // In-place UI update to avoid rebuilding the relay list during drag
+    const valEl = document.querySelector(`.relay-h-scrubber[data-relay-id="${relay.id}"] .relay-h-value`);
+    if (valEl) valEl.textContent = relay.h.toFixed(1);
+    const slider = document.querySelector(`.relay-h-slider[data-relay-id="${relay.id}"]`);
+    if (slider) slider.value = relay.h;
+
+    // Lightweight geometry redraw only
+    drawGeometry(computeHops());
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (_relayHDrag) {
+      _relayHDrag = null;
+      document.body.style.userSelect = '';
+      recompute();
+    }
+  });
 }
 
 // ------------------- Recommendation engine (rule-based) -------------------
@@ -1295,5 +1544,7 @@ document.addEventListener('DOMContentLoaded', () => {
   updateTwoRayOptionsVisibility();
   updateBaseAzimuthVisibility();
   initMap();
+  initGeometryDrag();
+  initRelayHeightDrag();
   recompute();
 });

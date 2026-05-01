@@ -275,6 +275,7 @@
           <span class="legend-item"><span class="leg-line direct"></span>直接波</span>
           <span class="legend-item"><span class="leg-line reflected"></span>反射波</span>
           <span class="legend-item"><span class="leg-ellipse"></span>フレネル第1ゾーン</span>
+          <span class="legend-item geom-drag-hint">ドラッグ: 同時 | Shift: 高さのみ | Alt: 距離のみ | クリック→↑↓←→キー</span>
         </div>
       </div>
     </div>
@@ -284,6 +285,12 @@
         <span>08 · 中継器設定</span>
       </div>
       <div class="panel-body">
+        <div id="relay-bulk-bar" class="relay-bulk-bar" style="display:none;">
+          <span class="relay-bulk-label">全高さ一括</span>
+          <input type="range" id="relay-bulk-h" min="0.3" max="6" step="0.1" value="2.0"
+            oninput="document.getElementById('v-relay-bulk-h').textContent=parseFloat(this.value).toFixed(1);updateRelayHAll(parseFloat(this.value))">
+          <span id="v-relay-bulk-h">2.0</span> m
+        </div>
         <div id="relay-list"></div>
         <div id="relay-empty" class="empty-state">中継器が配置されていません。地図をクリックして追加してください。</div>
       </div>
