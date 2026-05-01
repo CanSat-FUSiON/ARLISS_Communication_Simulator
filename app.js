@@ -735,33 +735,154 @@ function saveConfig() {
   URL.revokeObjectURL(url);
 }
 
+// Validate and sanitize a loaded config object.
+// Returns { ok: true, warnings: [], state: sanitizedState } or throws on fatal errors.
+function validateConfig(cfg) {
+  if (typeof cfg !== 'object' || cfg === null) throw new Error('ファイルがJSONオブジェクトではありません');
+
+  const ver = cfg.version;
+  const SUPPORTED = ['0.2'];
+  const warnings = [];
+  if (ver === undefined) {
+    warnings.push('version フィールドがありません。互換形式として読み込みます。');
+  } else if (!SUPPORTED.includes(String(ver))) {
+    warnings.push(`未知のバージョン "${ver}"。最新形式として読み込みます。`);
+  }
+
+  if (!cfg.state || typeof cfg.state !== 'object') throw new Error('state フィールドがありません');
+  const s = cfg.state;
+
+  // Clamp numeric fields to valid range; apply defaults for missing fields
+  function clampNum(val, min, max, def) {
+    const n = Number(val);
+    if (!isFinite(n)) { warnings.push(`数値フィールドを ${def} にリセットしました`); return def; }
+    return Math.min(max, Math.max(min, n));
+  }
+  function oneOf(val, allowed, def) {
+    return allowed.includes(val) ? val : (warnings.push(`値 "${val}" は無効のため "${def}" にリセットしました`), def);
+  }
+
+  const band = oneOf(String(s.band), ['433','915','920','2400'], '920');
+  const txPwr = clampNum(s.txPwr, 0, 30, 13);
+  const txAntId = typeof s.txAntId === 'string' ? s.txAntId : 'whip-rfd900';
+  const txGainCustom = clampNum(s.txGainCustom, -5, 30, 2.0);
+  const rxAntId = typeof s.rxAntId === 'string' ? s.rxAntId : 'yagi-9el';
+  const rxGainCustom = clampNum(s.rxGainCustom, -5, 30, 12.0);
+  const hCansat = clampNum(s.hCansat, 0.05, 3, 0.3);
+  const hBase = clampNum(s.hBase, 0.5, 10, 4.0);
+  const hRelay = clampNum(s.hRelay, 0.3, 6, 2.0);
+  const sf = clampNum(s.sf, 7, 12, 10);
+  const bw = oneOf(Number(s.bw), [125, 250, 500], 125);
+  const cr = clampNum(s.cr, 1, 4, 1);
+  const payload = clampNum(s.payload, 1, 255, 32);
+  const useTwoRay = typeof s.useTwoRay === 'boolean' ? s.useTwoRay : true;
+  const includeFade = typeof s.includeFade === 'boolean' ? s.includeFade : true;
+  const marginTarget = clampNum(s.marginTarget, 0, 20, 10);
+
+  // Validate relays array
+  const rawRelays = Array.isArray(s.relays) ? s.relays : [];
+  const relays = rawRelays
+    .filter((r, i) => {
+      if (typeof r !== 'object' || r === null) { warnings.push(`中継器[${i}] が不正: 無視します`); return false; }
+      if (!isFinite(Number(r.lat)) || !isFinite(Number(r.lon))) { warnings.push(`中継器[${i}] の座標が不正: 無視します`); return false; }
+      return true;
+    })
+    .slice(0, MAX_RELAYS)
+    .map(r => ({
+      lat: Number(r.lat),
+      lon: Number(r.lon),
+      h: clampNum(r.h, 0.3, 6, 2.0),
+      antId: typeof r.antId === 'string' ? r.antId : 'whip-rfd900',
+      gainCustom: clampNum(r.gainCustom, -5, 30, 2.0),
+    }));
+
+  if (rawRelays.length > MAX_RELAYS) {
+    warnings.push(`中継器が ${MAX_RELAYS} 台を超えているため、最初の ${MAX_RELAYS} 台のみ読み込みました`);
+  }
+
+  const req = (typeof s.req === 'object' && s.req) ? s.req : {};
+  const validatedReq = {
+    duration: oneOf(req.duration, ['hours','day','multiday'], 'day'),
+    latency: oneOf(req.latency, ['realtime','near','batch'], 'near'),
+    bidir: oneOf(req.bidir, ['downlink','bidir'], 'bidir'),
+    power: oneOf(req.power, ['tight','moderate','ample'], 'moderate'),
+    notes: typeof req.notes === 'string' ? req.notes : '',
+  };
+
+  const sanitized = {
+    band, txPwr, txAntId, txGainCustom, rxAntId, rxGainCustom,
+    hCansat, hBase, hRelay, sf, bw, cr, payload, useTwoRay, includeFade, marginTarget,
+    cansat: { ...COORD_CANSAT },
+    base: { ...COORD_BASE },
+    relays,
+    req: validatedReq,
+  };
+
+  return { ok: true, warnings, state: sanitized };
+}
+
 function loadConfig(file) {
   const reader = new FileReader();
   reader.onload = (e) => {
+    let cfg;
     try {
-      const cfg = JSON.parse(e.target.result);
-      if (!cfg.state) throw new Error('無効な設定ファイルです');
-      // Clear existing
-      clearAllRelays();
-      // Apply
-      Object.assign(state, cfg.state);
-      // Restore relays
-      const savedRelays = cfg.state.relays || [];
-      state.relays = [];
-      savedRelays.forEach(r => {
-        const id = nextRelayId++;
-        const relay = { id, lat: r.lat, lon: r.lon, h: r.h, antId: r.antId, gainCustom: r.gainCustom || 2.0 };
-        state.relays.push(relay);
-        drawRelayOnMap(relay);
-      });
-      // Reflect to UI
-      reflectStateToUI();
-      recompute();
+      cfg = JSON.parse(e.target.result);
+    } catch {
+      showLoadError('JSONの解析に失敗しました。有効なJSONファイルを選択してください。');
+      return;
+    }
+
+    let result;
+    try {
+      result = validateConfig(cfg);
     } catch (err) {
-      alert('読込失敗: ' + err.message);
+      showLoadError('読込失敗: ' + err.message);
+      return;
+    }
+
+    // Apply validated state
+    clearAllRelays();
+    Object.assign(state, result.state);
+    state.relays = [];
+    result.state.relays.forEach(r => {
+      const id = nextRelayId++;
+      const relay = { id, lat: r.lat, lon: r.lon, h: r.h, antId: r.antId, gainCustom: r.gainCustom };
+      state.relays.push(relay);
+      drawRelayOnMap(relay);
+    });
+    reflectStateToUI();
+    recompute();
+
+    if (result.warnings.length > 0) {
+      showLoadWarnings(result.warnings);
     }
   };
   reader.readAsText(file);
+}
+
+function showLoadError(msg) {
+  const panel = document.getElementById('verdict-panel');
+  const old = document.getElementById('load-error-banner');
+  if (old) old.remove();
+  const banner = document.createElement('div');
+  banner.id = 'load-error-banner';
+  banner.style.cssText = 'background:#1a0a0a;border:1px solid var(--red);color:var(--red);padding:10px 14px;font-size:12px;margin-bottom:8px;';
+  banner.textContent = '⚠ ' + msg;
+  panel.parentNode.insertBefore(banner, panel);
+  setTimeout(() => banner.remove(), 8000);
+}
+
+function showLoadWarnings(warnings) {
+  const panel = document.getElementById('verdict-panel');
+  const old = document.getElementById('load-warn-banner');
+  if (old) old.remove();
+  const banner = document.createElement('div');
+  banner.id = 'load-warn-banner';
+  banner.style.cssText = 'background:#1a1200;border:1px solid var(--yellow);color:var(--yellow);padding:10px 14px;font-size:11px;margin-bottom:8px;';
+  banner.innerHTML = '⚠ 設定読込時の注意: <ul style="margin:4px 0 0;padding-left:16px;">' +
+    warnings.map(w => `<li>${w}</li>`).join('') + '</ul>';
+  panel.parentNode.insertBefore(banner, panel);
+  setTimeout(() => banner.remove(), 10000);
 }
 
 function reflectStateToUI() {
