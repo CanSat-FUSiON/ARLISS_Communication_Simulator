@@ -116,6 +116,18 @@
           </div>
           <input type="range" id="h-base" min="0.5" max="10" step="0.1" value="4">
         </div>
+
+        <div id="base-azimuth-field" class="slider-field" style="display:none;">
+          <div class="slider-row">
+            <label>指向方位 (地上局)</label>
+            <span class="slider-val"><span id="v-rx-azimuth">自動</span></span>
+          </div>
+          <div class="tab-row" style="margin-bottom:4px;">
+            <button id="btn-az-auto" class="active" style="flex:none;padding:4px 10px;font-size:10px;">自動</button>
+            <input type="range" id="rx-azimuth" min="0" max="359" step="1" value="0" style="flex:1;margin-left:6px;">
+          </div>
+          <div class="hint">自動: CanSat方向を自動計算。手動で向きを変更可能。</div>
+        </div>
       </div>
     </details>
 
@@ -285,6 +297,7 @@
                 <th>Prx</th>
                 <th>感度</th>
                 <th>マージン</th>
+                <th>指向損失</th>
                 <th>F1</th>
                 <th>バルジ</th>
               </tr>

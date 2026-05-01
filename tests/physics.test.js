@@ -181,3 +181,47 @@ test('tworay_db: existing validation vector preserved in PEC mode', () => {
   const v = p.tworay_db(30000, 0.3, 4, 920e6, null);
   assert.ok(Math.abs(v - 177.5) < 3, `PEC mode should still give ~177.5 dB, got ${v.toFixed(2)}`);
 });
+
+// ── Antenna directivity ───────────────────────────────────────────────────────
+
+test('antenna_pointing_loss_db: omni (hpbw=360) → 0 dB regardless of angle', () => {
+  assert.strictEqual(p.antenna_pointing_loss_db(0,   360, 0), 0);
+  assert.strictEqual(p.antenna_pointing_loss_db(90,  360, 0), 0);
+  assert.strictEqual(p.antenna_pointing_loss_db(180, 360, 0), 0);
+});
+
+test('antenna_pointing_loss_db: boresight (θ=0) → 0 dB for any directional antenna', () => {
+  const loss = p.antenna_pointing_loss_db(0, 60, 15);
+  assert.ok(Math.abs(loss) < 0.01, `Expected 0 dB at boresight, got ${loss}`);
+});
+
+test('antenna_pointing_loss_db: at half-HPBW → ~3 dB', () => {
+  // Half-power point at theta = HPBW/2
+  const loss = p.antenna_pointing_loss_db(30, 60, 15); // theta = 30° = HPBW/2 for 60° beam
+  assert.ok(Math.abs(loss - 3) < 0.1, `Expected ~3 dB at half-HPBW, got ${loss.toFixed(2)} dB`);
+});
+
+test('antenna_pointing_loss_db: 90° off-axis on yagi-5el (HPBW=60°) → ≥6 dB loss', () => {
+  // Spec requirement: yagi5el (HPBW=60°) aimed 90° off target → additional ≥6 dB loss
+  const loss = p.antenna_pointing_loss_db(90, 60, 15);
+  assert.ok(loss >= 6, `Expected ≥6 dB at 90° off-axis, got ${loss.toFixed(1)} dB`);
+});
+
+test('antenna_pointing_loss_db: beyond main lobe (θ ≥ HPBW) → capped at fb_db', () => {
+  const loss = p.antenna_pointing_loss_db(61, 60, 15); // just beyond HPBW
+  assert.strictEqual(loss, 15);
+});
+
+test('bearing: CanSat → Base approximately SW (180–270°)', () => {
+  const brg = p.bearing(
+    40.900522, -119.07909722,
+    40.654113159604734, -119.3529299890043,
+  );
+  assert.ok(brg > 200 && brg < 250, `Expected SW bearing ~220°, got ${brg.toFixed(1)}°`);
+});
+
+test('angle_diff: signed difference wraps correctly', () => {
+  assert.ok(Math.abs(p.angle_diff(350, 10) - 20) < 0.01,  'wrap +20');
+  assert.ok(Math.abs(p.angle_diff(10, 350) - (-20)) < 0.01, 'wrap -20');
+  assert.ok(Math.abs(p.angle_diff(0, 180)) === 180,          'exactly ±180');
+});

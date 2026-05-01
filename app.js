@@ -12,7 +12,8 @@ const state = {
   rxAntId: 'yagi-9el',
   hCansat: 0.3,
   hBase: 4.0,
-  hRelay: 2.0, // default for new relays
+  hRelay: 2.0,       // default for new relays
+  rxAzimuth: null,   // null = auto-computed bearing to CanSat
   sf: 10,
   bw: 125,
   cr: 1,
@@ -26,7 +27,7 @@ const state = {
   // map / relays
   cansat: { ...COORD_CANSAT },
   base:   { ...COORD_BASE },
-  relays: [], // [{id, lat, lon, h, antId, gainCustom}]
+  relays: [], // [{id, lat, lon, h, antId, gainCustom, azimuth}]
   // requirements
   req: {
     duration: 'day',
@@ -157,6 +158,7 @@ function addRelay(lat, lon) {
     h: state.hRelay,
     antId: defaultAnt.id,
     gainCustom: 2.0,
+    azimuth: null, // null = auto-computed bearing toward next node
   };
   state.relays.push(relay);
   drawRelayOnMap(relay);
@@ -234,13 +236,19 @@ function computeHops() {
   const ordered = orderedRelays();
   const nodes = [
     { type: 'cansat', lat: state.cansat.lat, lon: state.cansat.lon, h: state.hCansat,
-      gain: antennaGain(state.txAntId, state.txGainCustom), label: 'CanSat' },
+      gain: antennaGain(state.txAntId, state.txGainCustom),
+      ant: getAnt(state.txAntId), azimuth: null, label: 'CanSat' },
     ...ordered.map(r => ({
       type: 'relay', lat: r.lat, lon: r.lon, h: r.h,
-      gain: antennaGain(r.antId, r.gainCustom), label: `中継R${r.id}`,
+      gain: antennaGain(r.antId, r.gainCustom),
+      ant: getAnt(r.antId), azimuth: r.azimuth, label: `中継R${r.id}`, relay: r,
     })),
     { type: 'base', lat: state.base.lat, lon: state.base.lon, h: state.hBase,
-      gain: antennaGain(state.rxAntId, state.rxGainCustom), label: '地上局' },
+      gain: antennaGain(state.rxAntId, state.rxGainCustom),
+      ant: getAnt(state.rxAntId),
+      azimuth: state.rxAzimuth !== null ? state.rxAzimuth
+               : bearing(state.base.lat, state.base.lon, state.cansat.lat, state.cansat.lon),
+      label: '地上局' },
   ];
 
   const hops = [];
@@ -248,21 +256,37 @@ function computeHops() {
     const a = nodes[i];
     const b = nodes[i + 1];
     const d_m = haversine(a.lat, a.lon, b.lat, b.lon);
-    const tx_dbm = state.txPwr; // assume same Tx power across hops (simplification)
+    const tx_dbm = state.txPwr;
     const gamma_opts = (state.useTwoRay && state.gammaMode === 'fresnel')
       ? { pol: state.pol, ...GROUND_PRESETS[state.groundPreset] }
       : null;
+
+    // Bearing of the link
+    const brg_ab = bearing(a.lat, a.lon, b.lat, b.lon);
+    const brg_ba = bearing(b.lat, b.lon, a.lat, a.lon);
+
+    // TX pointing deviation (CanSat is effectively omni, no pointing loss from TX)
+    const az_tx = (a.azimuth !== null) ? a.azimuth : brg_ab;
+    const dev_tx = Math.abs(angle_diff(az_tx, brg_ab));
+
+    // RX pointing deviation
+    const az_rx = (b.azimuth !== null) ? b.azimuth : brg_ba;
+    const dev_rx = Math.abs(angle_diff(az_rx, brg_ba));
+
     const m = compute_hop_metrics({
       d_m, h_a: a.h, h_b: b.h, f_hz,
       tx_dbm, g_tx: a.gain, l_tx: 1.0,
       g_rx: b.gain, l_rx: 1.5,
       sens_dbm: sens, use_tworay: state.useTwoRay, fade_db: fade,
       gamma_opts,
+      hpbw_tx: a.ant.hpbw_deg, fb_tx: a.ant.fb_db, dev_tx,
+      hpbw_rx: b.ant.hpbw_deg, fb_rx: b.ant.fb_db, dev_rx,
     });
     hops.push({
       label: `${a.label} → ${b.label}`,
       d_m, d_km: d_m / 1000,
       h_a: a.h, h_b: b.h,
+      brg_ab, az_tx, az_rx, dev_tx, dev_rx,
       ...m, sens,
     });
   }
@@ -346,6 +370,7 @@ function recompute() {
       <td>${h.prx.toFixed(1)}</td>
       <td>${h.sens.toFixed(1)}</td>
       <td class="margin">${sign}${h.margin.toFixed(1)}</td>
+      <td>${(h.point_loss_tx + h.point_loss_rx).toFixed(1)}</td>
       <td>${h.F1.toFixed(1)}</td>
       <td>${h.bulge.toFixed(2)}</td>
     </tr>`;
@@ -361,7 +386,10 @@ function recompute() {
   renderRelayList();
 
   // Map path
-  if (map) updatePathLine();
+  if (map) {
+    updatePathLine();
+    drawBeamLayers();
+  }
 
   // Relay count
   document.getElementById('relay-count').textContent = state.relays.length;
@@ -423,6 +451,10 @@ function renderRelayList() {
       const g = a.id === 'custom' ? '可変' : `${a.gain_dbi.toFixed(1)} dBi`;
       return `<option value="${a.id}"${sel}>${a.name} (${g})</option>`;
     }).join('');
+    const curAnt = opts.find(a => a.id === r.antId) || opts[0];
+    const showAz = curAnt.pattern === 'dir';
+    const azLabel = r.azimuth !== null ? `${r.azimuth}°` : '自動';
+    const azVal = r.azimuth !== null ? r.azimuth : 0;
     return `<div class="relay-card" data-id="${r.id}">
       <div class="relay-card-head">
         <span class="relay-card-title">中継器 R${r.id}</span>
@@ -438,6 +470,13 @@ function renderRelayList() {
           <input type="range" min="0.3" max="6" step="0.1" value="${r.h}" oninput="updateRelayH(${r.id}, parseFloat(this.value))">
         </div>
       </div>
+      ${showAz ? `<div class="field" style="margin-top:6px;">
+        <label>指向方位: <span id="v-relay-az-${r.id}">${azLabel}</span></label>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button class="mini${r.azimuth === null ? ' active' : ''}" onclick="updateRelayAzimuth(${r.id},null)" style="flex:none;">自動</button>
+          <input type="range" min="0" max="359" step="1" value="${azVal}" oninput="updateRelayAzimuth(${r.id},parseInt(this.value))" style="flex:1;">
+        </div>
+      </div>` : ''}
       <div style="margin-top: 6px; text-align: right;">
         <button class="mini danger" onclick="removeRelay(${r.id})">削除</button>
       </div>
@@ -451,6 +490,15 @@ window.updateRelayAnt = function(id, antId) {
 window.updateRelayH = function(id, h) {
   const r = state.relays.find(x => x.id === id);
   if (r) { r.h = h; recompute(); }
+};
+window.updateRelayAzimuth = function(id, az) {
+  const r = state.relays.find(x => x.id === id);
+  if (!r) return;
+  r.azimuth = az;
+  const label = document.getElementById(`v-relay-az-${id}`);
+  if (label) label.textContent = az !== null ? az + '°' : '自動';
+  updateBeamVisuals();
+  recompute();
 };
 
 // ------------------- Geometry SVG -------------------
@@ -786,6 +834,8 @@ function validateConfig(cfg) {
   const gammaMode = oneOf(s.gammaMode, ['pec', 'fresnel'], 'fresnel');
   const groundPreset = oneOf(s.groundPreset, Object.keys(GROUND_PRESETS), 'dry_sand');
   const pol = oneOf(s.pol, ['V', 'H'], 'V');
+  const rxAzimuth = (s.rxAzimuth === null || s.rxAzimuth === undefined)
+    ? null : clampNum(s.rxAzimuth, 0, 359, null);
   const includeFade = typeof s.includeFade === 'boolean' ? s.includeFade : true;
   const marginTarget = clampNum(s.marginTarget, 0, 20, 10);
 
@@ -804,6 +854,8 @@ function validateConfig(cfg) {
       h: clampNum(r.h, 0.3, 6, 2.0),
       antId: typeof r.antId === 'string' ? r.antId : 'whip-rfd900',
       gainCustom: clampNum(r.gainCustom, -5, 30, 2.0),
+      azimuth: (r.azimuth === null || r.azimuth === undefined)
+        ? null : clampNum(r.azimuth, 0, 359, null),
     }));
 
   if (rawRelays.length > MAX_RELAYS) {
@@ -822,7 +874,7 @@ function validateConfig(cfg) {
   const sanitized = {
     band, txPwr, txAntId, txGainCustom, rxAntId, rxGainCustom,
     hCansat, hBase, hRelay, sf, bw, cr, payload,
-    useTwoRay, gammaMode, groundPreset, pol, includeFade, marginTarget,
+    useTwoRay, gammaMode, groundPreset, pol, rxAzimuth, includeFade, marginTarget,
     cansat: { ...COORD_CANSAT },
     base: { ...COORD_BASE },
     relays,
@@ -903,6 +955,59 @@ function updateTwoRayOptionsVisibility() {
     (twoRayOn && state.gammaMode === 'fresnel') ? '' : 'none';
 }
 
+function updateBaseAzimuthVisibility() {
+  const ant = getAnt(state.rxAntId);
+  const isDir = ant.pattern === 'dir';
+  document.getElementById('base-azimuth-field').style.display = isDir ? '' : 'none';
+}
+
+function updateBeamVisuals() {
+  if (!map) return;
+  drawBeamLayers();
+}
+
+let beamLayers = [];
+function drawBeamLayers() {
+  beamLayers.forEach(l => map.removeLayer(l));
+  beamLayers = [];
+
+  // Base station beam
+  const baseAnt = getAnt(state.rxAntId);
+  if (baseAnt.pattern === 'dir' && baseAnt.hpbw_deg < 360) {
+    const az = state.rxAzimuth !== null ? state.rxAzimuth
+               : bearing(state.base.lat, state.base.lon, state.cansat.lat, state.cansat.lon);
+    const layer = makeBeamSector(state.base.lat, state.base.lon, az, baseAnt.hpbw_deg, '#ffb84d');
+    layer.addTo(map);
+    beamLayers.push(layer);
+  }
+
+  // Relay beams
+  state.relays.forEach(r => {
+    const ant = getAnt(r.antId);
+    if (ant.pattern === 'dir' && ant.hpbw_deg < 360 && r.azimuth !== null) {
+      const layer = makeBeamSector(r.lat, r.lon, r.azimuth, ant.hpbw_deg, '#60a5fa');
+      layer.addTo(map);
+      beamLayers.push(layer);
+    }
+  });
+}
+
+function makeBeamSector(lat, lon, az_deg, hpbw_deg, color) {
+  const R = 15000; // visual radius in meters
+  const steps = 20;
+  const halfAngle = hpbw_deg / 2;
+  const pts = [[lat, lon]];
+  for (let i = 0; i <= steps; i++) {
+    const angle = az_deg - halfAngle + (hpbw_deg * i / steps);
+    const angleRad = angle * Math.PI / 180;
+    const dlat = (R * Math.cos(angleRad)) / 111319;
+    const dlon = (R * Math.sin(angleRad)) / (111319 * Math.cos(lat * Math.PI / 180));
+    pts.push([lat + dlat, lon + dlon]);
+  }
+  pts.push([lat, lon]);
+  return L.polygon(pts, { color, fillColor: color, fillOpacity: 0.08, weight: 1, opacity: 0.5 });
+}
+
 function reflectStateToUI() {
   document.getElementById('band').value = state.band;
   document.getElementById('tx-pwr').value = state.txPwr;
@@ -927,6 +1032,15 @@ function reflectStateToUI() {
   rebuildAntennaSelects();
   document.getElementById('cansat-ant').value = state.txAntId;
   document.getElementById('base-ant').value = state.rxAntId;
+  // Azimuth
+  const azEl = document.getElementById('rx-azimuth');
+  if (state.rxAzimuth !== null) {
+    azEl.value = state.rxAzimuth;
+    document.getElementById('v-rx-azimuth').textContent = state.rxAzimuth + '°';
+  } else {
+    document.getElementById('v-rx-azimuth').textContent = '自動';
+  }
+  updateBaseAzimuthVisibility();
 }
 
 function resetAll() {
@@ -938,7 +1052,7 @@ function resetAll() {
     hCansat: 0.3, hBase: 4.0, hRelay: 2.0,
     sf: 10, bw: 125, cr: 1, payload: 32,
     useTwoRay: true, gammaMode: 'fresnel', groundPreset: 'dry_sand', pol: 'V',
-    includeFade: true, marginTarget: 10,
+    rxAzimuth: null, includeFade: true, marginTarget: 10,
     cansat: { ...COORD_CANSAT }, base: { ...COORD_BASE },
     req: { duration: 'day', latency: 'near', bidir: 'bidir', power: 'moderate', notes: '' },
   });
@@ -961,6 +1075,7 @@ function bindAll() {
   document.getElementById('base-ant').addEventListener('change', (e) => {
     state.rxAntId = e.target.value;
     updateAntennaNotes();
+    updateBaseAzimuthVisibility();
     recompute();
   });
 
@@ -974,6 +1089,18 @@ function bindAll() {
   });
   document.getElementById('h-base').addEventListener('input', (e) => {
     state.hBase = parseFloat(e.target.value);
+    recompute();
+  });
+  document.getElementById('rx-azimuth').addEventListener('input', (e) => {
+    state.rxAzimuth = parseInt(e.target.value);
+    document.getElementById('v-rx-azimuth').textContent = state.rxAzimuth + '°';
+    updateBeamVisuals();
+    recompute();
+  });
+  document.getElementById('btn-az-auto').addEventListener('click', () => {
+    state.rxAzimuth = null;
+    document.getElementById('v-rx-azimuth').textContent = '自動';
+    updateBeamVisuals();
     recompute();
   });
   document.getElementById('payload').addEventListener('input', (e) => {
@@ -1076,6 +1203,7 @@ document.addEventListener('DOMContentLoaded', () => {
   rebuildAntennaSelects();
   bindAll();
   updateTwoRayOptionsVisibility();
+  updateBaseAzimuthVisibility();
   initMap();
   recompute();
 });

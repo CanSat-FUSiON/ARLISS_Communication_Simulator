@@ -105,6 +105,34 @@ function tworay_db(d_m, ht_m, hr_m, f_hz, gamma_opts) {
   return fspl_to_los - interference;
 }
 
+// Bearing from point A to point B (degrees, 0=N, 90=E clockwise)
+function bearing(lat1, lon1, lat2, lon2) {
+  const toRad = d => d * Math.PI / 180;
+  const phi1 = toRad(lat1), phi2 = toRad(lat2);
+  const dlam = toRad(lon2 - lon1);
+  const y = Math.sin(dlam) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dlam);
+  return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+}
+
+// Signed angular difference in [-180, 180]
+function angle_diff(from_deg, to_deg) {
+  return ((to_deg - from_deg + 180) % 360 + 360) % 360 - 180;
+}
+
+// Antenna pointing loss (dB) — cos² model with F/B cap.
+// theta_deg: absolute angle deviation from boresight (degrees)
+// hpbw_deg:  full half-power beamwidth (degrees). 360 = omni (no loss).
+// fb_db:     front-to-back ratio (dB) used as floor outside main lobe.
+function antenna_pointing_loss_db(theta_deg, hpbw_deg, fb_db) {
+  if (hpbw_deg >= 360) return 0;
+  const t = Math.min(Math.abs(theta_deg), 180);
+  if (t >= hpbw_deg) return fb_db;
+  const gain_ratio = Math.cos(Math.PI * t / (2 * hpbw_deg)) ** 2;
+  const floor_ratio = Math.pow(10, -fb_db / 10);
+  return -10 * Math.log10(Math.max(gain_ratio, floor_ratio));
+}
+
 // First Fresnel zone radius at midpoint (m)
 function fresnel1_mid(d_m, f_hz) {
   const lambda = C_LIGHT / f_hz;
@@ -146,18 +174,24 @@ function mw_to_dbm(mw) { return 10 * Math.log10(mw); }
 // Compute one hop's link metrics
 function compute_hop_metrics(opts) {
   // opts: { d_m, h_a, h_b, f_hz, tx_dbm, g_tx, l_tx, g_rx, l_rx, sens_dbm,
-  //         use_tworay, fade_db, gamma_opts? }
+  //         use_tworay, fade_db, gamma_opts?,
+  //         hpbw_tx?, fb_tx?, dev_tx?,   <- TX antenna directivity
+  //         hpbw_rx?, fb_rx?, dev_rx? }  <- RX antenna directivity
   const fspl = fspl_db(opts.d_m, opts.f_hz);
   const tworay = tworay_db(opts.d_m, opts.h_a, opts.h_b, opts.f_hz, opts.gamma_opts || null);
   const path = opts.use_tworay ? tworay : fspl;
   const ground_extra = (opts.h_a < 0.5 || opts.h_b < 0.5) ? 2 : 0;
   const eirp = opts.tx_dbm + opts.g_tx - opts.l_tx;
-  const prx = eirp - path - opts.fade_db - ground_extra + opts.g_rx - opts.l_rx;
+  const point_loss_tx = antenna_pointing_loss_db(opts.dev_tx || 0, opts.hpbw_tx || 360, opts.fb_tx || 0);
+  const point_loss_rx = antenna_pointing_loss_db(opts.dev_rx || 0, opts.hpbw_rx || 360, opts.fb_rx || 0);
+  const prx = eirp - path - opts.fade_db - ground_extra + opts.g_rx - opts.l_rx
+              - point_loss_tx - point_loss_rx;
   const margin = prx - opts.sens_dbm;
   const F1 = fresnel1_mid(opts.d_m, opts.f_hz);
   const bulge = earth_bulge_mid(opts.d_m);
   const min_h = min_sym_height(opts.d_m, opts.f_hz);
-  return { fspl, tworay, path, eirp, prx, margin, F1, bulge, min_h, ground_extra };
+  return { fspl, tworay, path, eirp, prx, margin, F1, bulge, min_h, ground_extra,
+           point_loss_tx, point_loss_rx };
 }
 
 // Node.js compatibility (keep browser globals intact)
@@ -166,5 +200,6 @@ if (typeof module !== 'undefined' && module.exports) {
     haversine, fspl_db, tworay_db, fresnel_reflect, fresnel1_mid, earth_bulge_mid,
     min_sym_height, lora_bitrate, lora_toa, dbm_to_mw, mw_to_dbm,
     compute_hop_metrics, GROUND_PRESETS,
+    bearing, angle_diff, antenna_pointing_loss_db,
   };
 }
