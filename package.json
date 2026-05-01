@@ -1,0 +1,11 @@
+{
+  "name": "cansat-link-sim",
+  "version": "0.2.0",
+  "description": "CanSat desert communication link budget simulator for ARLISS",
+  "scripts": {
+    "test": "node --test tests/physics.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
